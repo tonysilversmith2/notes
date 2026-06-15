@@ -1,0 +1,75 @@
+
+import sqlite3
+import pandas as pd
+
+sql_query = """
+SELECT 
+    e.emp_name,
+    e.department,
+    e.base_salary,
+    SUM(CASE WHEN a.status = 'Present' THEN 1 ELSE 0 END) AS days_present,
+    COUNT(a.status) AS total_days
+FROM 
+    employees e
+JOIN 
+    attendance a ON e.emp_id = a.emp_id
+GROUP BY 
+    e.emp_id, e.emp_name, e.department, e.base_salary;
+"""
+
+def main():
+    conn = sqlite3.connect(":memory:")
+    cursor = conn.cursor()
+    
+    cursor.execute("""
+    CREATE TABLE employees (
+        emp_id INTEGER PRIMARY KEY,
+        emp_name TEXT,
+        department TEXT,
+        base_salary REAL
+    );
+    """)
+    
+    cursor.execute("""
+    CREATE TABLE attendance (
+        emp_id INTEGER,
+        work_date DATE,
+        status TEXT,
+        FOREIGN KEY(emp_id) REFERENCES employees(emp_id)
+    );
+    """)
+    
+    employees_data = [
+        (1, "Asha", "HR", 30000.0),
+        (2, "Vijay", "IT", 40000.0),
+        (3, "Rina", "Finance", 35000.0),
+        (4, "Karan", "IT", 38000.0),
+        (5, "Meera", "HR", 32000.0)
+    ]
+    cursor.executemany("INSERT INTO employees VALUES (?, ?, ?, ?);", employees_data)
+    
+    attendance_data = [
+        (1, "2025-02-01", "Present"), (1, "2025-02-02", "Absent"),
+        (2, "2025-02-01", "Present"), (2, "2025-02-02", "Present"),
+        (3, "2025-02-01", "Present"), (3, "2025-02-02", "Present"),
+        (4, "2025-02-01", "Absent"),  (4, "2025-02-02", "Present"),
+        (5, "2025-02-01", "Present"), (5, "2025-02-02", "Absent")
+    ]
+    cursor.executemany("INSERT INTO attendance VALUES (?, ?, ?);", attendance_data)
+    conn.commit()
+    
+    df = pd.read_sql_query(sql_query, conn)
+    
+    df['attendance_pct'] = (df['days_present'] / df['total_days']) * 100
+    deduction = (df['total_days'] - df['days_present']) * 500
+    df['net_salary'] = df['base_salary'] - deduction
+    
+    df_final = df[['emp_name', 'department', 'attendance_pct', 'net_salary']]
+    df_final = df_final.sort_values(by=['attendance_pct', 'net_salary'], ascending=[True, True]).reset_index(drop=True)
+    
+    print(df_final.to_string(index=True))
+    
+    conn.close()
+
+if __name__ == "__main__":
+    main()
