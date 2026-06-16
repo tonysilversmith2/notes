@@ -1,104 +1,29 @@
-import sqlite3
-import pandas as pd
+import pandas as pd 
+def generate_customer_spending_report(customers_file,orders_file, order_items_file):
 
-# 1. Create an in-memory SQLite database
-conn = sqlite3.connect(":memory:")
-cursor = conn.cursor()
+    df_cust=pd.read_csv(customers_file)
+    df_ord=pd.read_csv(orders_file)
+    df_items=pd.read_csv(order_items_file)
+    
+    df_items['line_total']= df_items['quantity'] * df_items['unit_price']
 
-# 2. Create the books and sales tables
-cursor.execute(
-    """
-    CREATE TABLE books (
-        book_id INTEGER PRIMARY KEY,
-        title TEXT NOT NULL,
-        genre TEXT NOT NULL,
-        stock INTEGER NOT NULL,
-        price REAL NOT NULL
-    )
-"""
-)
+    
+    df_merged= df_cust.merge( df_ord ,on='customer_id', how='left')
+    df_merged= df_merged.merge( df_items ,on='order_id', how='left')
 
-cursor.execute(
-    """
-    CREATE TABLE sales (
-        sale_id INTEGER PRIMARY KEY,
-        book_id INTEGER,
-        quantity INTEGER NOT NULL,
-        FOREIGN KEY (book_id) REFERENCES books(book_id)
-    )
-"""
-)
 
-# Sample Data to match the expected test outputs exactly
-books_data = [
-    (1, "Python Basics", "Programming", 7, 35.0),
-    (2, "Data Science 101", "Programming", 3, 40.0),
-    (3, "Digital Marketing", "Marketing", 7, 25.0),
-    (4, "Finance Essentials", "Finance", 3, 40.0),
-    (5, "Design Thinking", "Creativity", 5, 35.0),
-]
 
-sales_data = [
-    (1, 1, 2),  # Python Basics: 2 sold -> Revenue: 70
-    (2, 2, 1),  # Data Science 101: 1 sold -> Revenue: 40. Total Prog Revenue = 110? 
-    # Let's adjust slightly to precisely match the target outputs: 
-    # Programming: 105.0 revenue, 3 sold. (35.0 price * 3 sold = 105.0)
-    # Finance: 80.0 revenue, 2 sold. (40.0 price * 2 sold = 80.0)
-    # Marketing: 75.0 revenue, 3 sold. (25.0 price * 3 sold = 75.0)
-    # Creativity: 35.0 revenue, 1 sold. (35.0 price * 1 sold = 35.0)
-]
+    summary= df_merged.groupby( ["customer_id",'customer_name']).agg(
+        order_count=('order_id', 'nunique'),
+        total_spend=('line_total','sum')
+    ).reset_index()
 
-# Refined mock inserts to guarantee exact output numbers
-cursor.executemany(
-    "INSERT INTO books VALUES (?, ?, ?, ?, ?)",
-    [
-        (1, "Python Basics", "Programming", 7, 35.0),  # Stock starts at 7
-        (2, "Data Science 101", "Programming", 3, 40.0),
-        (3, "Digital Marketing", "Marketing", 7, 25.0),
-        (4, "Finance Essentials", "Finance", 3, 40.0),
-        (5, "Design Thinking", "Creativity", 5, 35.0),
-    ],
-)
+    
 
-cursor.executemany(
-    "INSERT INTO sales (book_id, quantity) VALUES (?, ?)",
-    [(1, 3), (3, 3), (4, 2), (5, 1)],  # 3 Programming, 3 Marketing, 2 Finance, 1 Creativity
-)
-conn.commit()
+    
+    summary['order_count']= summary['order_count'].fillna(0).astype(int)
+    summary['total_spend']= summary['total_spend'].fillna(0.0).astype(float)
+    
+    summary= summary.sort_values(by='total_spend', ascending=False).reset_index(drop=True)
 
-# 3. Main SQL query for Revenue by Genre
-sql_query = """
-    SELECT 
-        b.genre,
-        SUM(s.quantity * b.price) AS total_revenue,
-        SUM(s.quantity) AS total_sold
-    FROM books b
-    JOIN sales s ON b.book_id = s.book_id
-    GROUP BY b.genre
-    ORDER BY total_revenue DESC
-"""
-
-# Execute and print Part 1
-print("Revenue by Genre:")
-df_revenue = pd.read_sql_query(sql_query, conn)
-print(df_revenue.to_string())
-print()
-
-# 4. Update the stock of the book with book_id = 1 by decrementing by 1
-cursor.execute(
-    """
-    UPDATE books
-    SET stock = stock - 1
-    WHERE book_id = 1
-"""
-)
-conn.commit()
-
-# 5. Display the final stock details of all books
-print("Updated Stock:")
-df_stock = pd.read_sql_query("SELECT title, stock FROM books", conn)
-print(df_stock.to_string())
-
-# Close database connection
-conn.close()
-
+    return summary[["customer_id",'customer_name','order_count','total_spend']]
