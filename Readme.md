@@ -1,6 +1,6 @@
-# IAMNEO / Examly / NeoColab Preparation Guide
+# Preparation Guide
 
-A complete revision guide for Python, NumPy, OOP, Pandas, and SQL patterns frequently asked in LTM Milestone assessments.
+A complete revision guide for Python, NumPy, OOP, Pandas, and SQL patterns frequently asked questions.
 
 ---
 
@@ -1031,10 +1031,10 @@ def classify_inventory(stock_array, target):
 - Classes and Methods
 - OOP Basics
 
-These five analyzers follow nearly identical hidden-test patterns and are among the most common IAMNEO / Examly questions.
+These five analyzers follow nearly identical hidden-test patterns and are among the most common questions.
 
 # Conclusion
 
-Master these patterns and functions and you can solve around **80–90% of IAMNEO / Examly / NeoColab Python (NumPy + OOP) and SQL assessments**.
+Master these patterns and functions and you can solve around **80–90% of Python (NumPy + OOP) and SQL assessments**.
 
-Good luck with your LTM Milestone preparation! 🚀
+Good luck with your preparation! 🚀
