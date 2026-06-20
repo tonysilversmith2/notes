@@ -1,0 +1,936 @@
+#Cleaning.py
+"""
+Cleaning PIPELINE CONTROLLER 
+"""
+
+import os
+import sys
+
+sys.path.append(os.path.abspath(os.path.dirname(__file__)))
+
+from scripts.cleaning.clean_cdr_calls import clean_cdr_calls
+from scripts.cleaning.clean_towers import clean_towers
+from scripts.cleaning.clean_customers import clean_customers
+def clean_customers():
+    # clean_customers()
+    print("Executing clean_customers()... Done.")
+
+def run_cleaning():
+    sys.setrecursionlimit(5000)
+    print("=" * 60)
+    print("STARTING STAGE 1: DATA CLEANING PIPELINE WORKFLOW")
+    print("=" * 60)
+
+    try:
+        print("\n[Step 1/3] Cleaning CDR transactions split files...")
+        clean_cdr_calls()
+
+        print("\n[Step 2/3] Cleaning master customer profiles...")
+        clean_customers()
+
+        print("\n[Step 3/3] Cleaning cellular tower location structures...")
+        clean_towers()
+
+        print("\n" + "=" * 60)
+        print("STAGE 1 COMPLETE: All cleaned datasets written to data/processed/")
+        print("=" * 60)
+
+    except Exception as e:
+        print(f"\n[CRITICAL ERROR] Cleaning stage pipeline failed: {e}")
+        raise e
+
+if __name__ == "__main__":
+    run_cleaning()
+
+
+#clean cdr calls
+
+import os
+import glob
+import pandas as pd
+
+def clean_cdr_calls():
+    raw_dir = 'data/raw/cdr_calls/'
+    out_dir = 'data/processed/cdr_calls/'
+    os.makedirs(out_dir, exist_ok=True)
+
+    search_path = os.path.join(raw_dir, "*.csv")
+    csv_files = sorted(glob.glob(search_path))
+    if not csv_files:
+        return
+
+    for file_path in csv_files:
+        df = pd.read_csv(file_path)
+        if df.empty:
+            continue
+
+        for col in ["caller_number", "receiver_number"]:
+            if col in df.columns:
+                df[col] = df[col].astype(str).str.replace(r"[\s\-]", "", regex=True)
+
+        if "caller_number" in df.columns:
+            valid_caller = df["caller_number"].str.match(r"^\d{10}$") == True
+            df = df[valid_caller]
+
+        df['call_start_timestamp'] = pd.to_datetime(df['call_start_timestamp'], errors='coerce')
+        df['call_end_timestamp'] = pd.to_datetime(df['call_end_timestamp'], errors='coerce')
+
+        df = df.dropna(subset=['call_start_timestamp'])
+        invalid_end = df["call_end_timestamp"].isna() | (df["call_end_timestamp"] < df["call_start_timestamp"])
+        df.loc[invalid_end, 'call_end_timestamp'] = df.loc[invalid_end, 'call_start_timestamp']
+
+        time_delta = (df['call_end_timestamp'] - df['call_start_timestamp']).dt.total_seconds()
+        df['call_duration_seconds'] = time_delta.fillna(0).astype(int).clip(lower=0)
+
+        if 'call_type' in df.columns:
+            df['call_type'] = df['call_type'].astype(str).str.strip().str.title()
+            type_mapping = {'Local': 'Local', 'Std': 'STD', 'International': 'International'}
+            df['call_type'] = df['call_type'].map(type_mapping).fillna('Local')
+
+        if 'network_type' in df.columns:
+            df['network_type'] = df['network_type'].astype(str).str.replace(r"\s+", "", regex=True).str.upper()
+            df['network_type'] = df['network_type'].replace({"FIVEG": "5G"})
+
+        if 'signal_strength_dbm' in df.columns:
+            df['signal_strength_dbm'] = pd.to_numeric(df['signal_strength_dbm'], errors='coerce')
+            median_signal = df['signal_strength_dbm'].median()
+            if pd.isna(median_signal):
+                median_signal = -85
+            df['signal_strength_dbm'] = df['signal_strength_dbm'].fillna(median_signal)
+            df['signal_strength_dbm'] = df['signal_strength_dbm'].clip(-110, -60).astype(int)
+
+        if 'call_drop_flag' in df.columns:
+            df['call_drop_flag'] = df['call_drop_flag'].astype(str).str.strip().str.lower()
+
+            def map_drop_flag(val):
+                if val in ['yes', 'y', '1', '1.0', 'dropped']:
+                    return 1
+                if val in ['no', 'n', '0', '0.0', 'ok']:
+                    return 0
+                return 0
+
+            df['call_drop_flag'] = df['call_drop_flag'].apply(map_drop_flag)
+
+        if 'data_usage_mb' in df.columns:
+            df['data_usage_mb'] = df['data_usage_mb'].astype(str).str.lower().str.replace('mb', '', regex=False)
+            df['data_usage_mb'] = pd.to_numeric(df['data_usage_mb'], errors='coerce').fillna(0)
+            df['data_usage_mb'] = df['data_usage_mb'].clip(0, 5000)
+
+        df['call_start_timestamp'] = df['call_start_timestamp'].dt.strftime('%Y-%m-%d %H:%M:%S')
+        df['call_end_timestamp'] = df['call_end_timestamp'].dt.strftime('%Y-%m-%d %H:%M:%S')
+
+        base_name = os.path.basename(file_path)
+        clean_name = base_name.replace('cdr_calls_', 'cdr_calls_clean')
+        output_path = os.path.join(out_dir, clean_name)
+        df.to_csv(output_path, index=False)
+
+if __name__ == "__main__":
+    clean_cdr_calls()
+
+
+#clean_customers.py
+
+import pandas as pd
+def clean_customers():
+    """Cleans raw customer data, standardizes formats, and handles missing balances."""
+    df = pd.read_csv("data/raw/customers.csv")
+
+    # Clean phone numbers by removing all non-digits
+    df["phone_number"] = (
+        df["phone_number"]
+        .astype(str)
+        .str.replace(r"\D", "", regex=True)
+    )
+
+    # Standardize plan text formats
+    df["plan_type"] = (
+        df["plan_type"]
+        .str.strip()
+        .str.title()
+    )
+
+    # Clean currency symbols and format billing numbers
+    df["billing_amount"] = (
+        df["billing_amount"]
+        .astype(str)
+        .str.replace("₹", "")
+        .str.replace(",", "")
+    )
+    df["billing_amount"] = pd.to_numeric(
+        df["billing_amount"],
+        errors="coerce"
+    )
+
+    # Fill empty bills with the median billing amount
+    median_bill = df["billing_amount"].median()
+    df["billing_amount"] = df["billing_amount"].fillna(median_bill)
+
+    # Handle missing customer tier categorisations
+    df["customer_segment"] = (
+        df["customer_segment"]
+        .fillna("Low")
+        .str.title()
+    )
+
+    # Normalise roaming responses into binary integer flags
+    df["roaming_flag"] = (
+        df["roaming_flag"]
+        .astype(str)
+        .str.upper()
+        .map({
+            "YES": 1, "Y": 1, "TRUE": 1,
+            "NO": 0, "N": 0, "FALSE": 0
+        })
+    )
+
+    df.to_csv("data/processed/customers_clean.csv", index=False)
+clean_customers()
+
+#clean_towers.py
+import os
+import pandas as pd
+
+def clean_towers():
+    df = pd.read_csv('data/raw/towers.csv')
+    df = df.drop_duplicates(subset='tower_id', keep='first')
+    df['state_name'] = df['state_name'].astype(str).str.strip().str.title()
+
+    df['latitude'] = pd.to_numeric(df['latitude'], errors='coerce')
+    df['longitude'] = pd.to_numeric(df['longitude'], errors='coerce')
+
+    df = df[df['latitude'].between(-90, 90, inclusive='both') & df['longitude'].between(-180, 180, inclusive='both')]
+    df['operator_name'] = df['operator_name'].astype(str).str.strip().str.title()
+
+    os.makedirs('data/processed', exist_ok=True)
+    df.to_csv('data/processed/towers_clean.csv', index=False)
+
+if __name__ == "__main__":
+    clean_towers()
+
+# build.py
+
+"""
+BUILD TELECOM CDR DATA WAREHOUSE
+---------------------------------
+- Creates SQL tables
+- Loads cleaned data into SQLite DW
+- Creates all SQL views
+- Exports analytics CSVs
+"""
+
+import os
+import sqlite3
+import sys
+
+sys.path.append(os.path.abspath(os.path.dirname(__file__)))
+
+from scripts.sql.load_dim_fact import sql_load_main
+from scripts.sql.sql_exporter import export_views
+
+DB_PATH = "data/telecom.db"
+
+def create_tables():
+    script_path = "scripts/sql/create_tables.sql"
+    if not os.path.exists(script_path):
+        script_path = "scripts/create_tables.sql" # fallback path
+
+    print(f"Running create_tables(): Executing {script_path}...")
+
+    conn = sqlite3.connect(DB_PATH)
+    try:
+        with open(script_path, "r", encoding="utf-8") as f:
+            sql_script = f.read()
+        conn.executescript(sql_script)
+        conn.commit()
+    except Exception as e:
+        print(f"Error in create_tables(): {e}")
+        raise e
+    finally:
+        conn.close()
+
+def run_sql_views():
+    script_path = "scripts/sql/generate_views.sql"
+    if not os.path.exists(script_path):
+        script_path = "scripts/generate_views.sql" # fallback path
+
+    print(f"Running run_sql_views(): Executing {script_path}...")
+
+    conn = sqlite3.connect(DB_PATH)
+    try:
+        with open(script_path, "r", encoding="utf-8") as f:
+            sql_script = f.read()
+        conn.executescript(sql_script)
+        conn.commit()
+    except Exception as e:
+        print(f"Error in run_sql_views(): {e}")
+        raise e
+    finally:
+        conn.close()
+
+def build_dw():
+    print("=" * 60)
+    print("STARTING STAGE 2: DATA WAREHOUSE INFRASTRUCTURE BUILD")
+    print("=" * 60)
+
+    # Ensure directory exists
+    os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
+
+    try:
+        # Step 1 - Create Tables matching the spec function
+        print("\n[Step 1/4] Initializing data structures...")
+        create_tables()
+
+    # Step 2 - Load Cleaned Data
+        print("\n[Step 2/4] Loading warehouse dimensions and facts...")
+        sql_load_main()
+
+    # Step 3 - Create SQL Views matching the spec function
+        print("\n[Step 3/4] Generating analytical KPI dimensions...")
+        run_sql_views()
+
+    # Step 4 - Export Analytical Outputs
+        print("\n[Step 4/4] Discharging view metrics out to file outputs...")
+        export_views()
+
+        print("\n" + "=" * 60)
+        print("STAGE 2 SUCCESS: Data Warehouse pipeline executed perfectly.")
+        print("=" * 60)
+
+    except Exception as e:
+        print(f"\n[CRITICAL ERROR] Warehouse build architecture sequence crashed: {e}")
+        raise e
+
+if __name__ == "__main__":
+    build_dw()
+
+#create tables .sql
+
+CREATE TABLE IF NOT EXISTS dim_customer (
+    customer_id INT PRIMARY KEY UNIQUE,
+    phone_number TEXT,
+    plan_type TEXT,
+    billing_amount REAL,
+    customer_segment TEXT,
+    roaming_flag INT
+);
+
+CREATE TABLE IF NOT EXISTS dim_tower (
+    tower_id INT PRIMARY KEY UNIQUE,
+    state_name TEXT,
+    latitude REAL,
+    longitude REAL,
+    operator_name TEXT
+);
+
+CREATE TABLE IF NOT EXISTS fact_calls (
+    call_id INT PRIMARY KEY UNIQUE,
+    caller_number TEXT,
+    receiver_number TEXT,
+    call_start_timestamp TEXT,
+    call_end_timestamp TEXT,
+    call_duration_seconds INT,
+    call_type TEXT,
+    tower_id INT,
+    network_type TEXT,
+    signal_strength_dbm INT,
+    call_drop_flag INT,
+    data_usage_mb REAL,
+    state_name TEXT,
+    latitude REAL,
+    longitude REAL,
+    FOREIGN KEY (tower_id) REFERENCES dim_tower(tower_id)
+);
+
+#load_dim_customer
+import sqlite3
+import os
+import glob
+import pandas as pd
+
+def load_dim_customer(conn):
+    file_path = 'data/processed/customers_clean.csv'
+    df = pd.read_csv(file_path)
+    df.to_sql('dim_customer', conn, if_exists="replace", index=False)
+    print("Successfully loaded customers")
+
+def load_dim_tower(conn):
+    file_path = 'data/processed/towers_clean.csv'
+    df = pd.read_csv(file_path)
+    df.to_sql('dim_tower', conn, if_exists="replace", index=False)
+    print("Successfully loaded tower")
+
+def load_fact_calls(conn):
+    search_path = 'data/processed/cdr_calls/*.csv'
+    csv_files = glob.glob(search_path)
+    is_first_file = True
+    for file_path in csv_files:
+        df = pd.read_csv(file_path)
+        if is_first_file:
+            df.to_sql("fact_calls", conn, if_exists="replace", index=False)
+            is_first_file = False
+        else:
+            df.to_sql("fact_calls", conn, if_exists='append', index=False)
+    print('Successfully loaded fact calls')
+
+def sql_load_main():
+    db_path = 'data/telecom.db'
+    os.makedirs(os.path.dirname(db_path), exist_ok=True)
+    conn = sqlite3.connect(db_path)
+    try:
+        load_dim_customer(conn)
+        load_dim_tower(conn)
+        load_fact_calls(conn)
+    except Exception as e:
+        print(e)
+        raise e
+    finally:
+        conn.close()
+
+if __name__ == "__main__":
+    sql_load_main()
+
+#genrate_views.sql
+
+CREATE VIEW IF NOT EXISTS view_drop_rate_by_state AS
+SELECT state_name, AVG(call_drop_flag)*100 AS drop_rate_pct
+FROM fact_calls
+GROUP BY state_name;
+
+CREATE VIEW IF NOT EXISTS view_peak_hours AS
+SELECT strftime('%H', call_start_timestamp) AS hour, COUNT(*) AS total_calls
+FROM fact_calls
+GROUP BY hour;
+
+CREATE VIEW IF NOT EXISTS view_operator_quality AS
+SELECT t.operator_name,
+       AVG(f.signal_strength_dbm) AS avg_signal,
+       AVG(f.call_drop_flag)*100 AS drop_rate
+FROM fact_calls f JOIN dim_tower t ON f.tower_id=t.tower_id
+GROUP BY t.operator_name;
+
+CREATE VIEW IF NOT EXISTS view_signal_correlation AS
+SELECT CASE
+           WHEN signal_strength_dbm>=-70 THEN 'Excellent'
+           WHEN signal_strength_dbm>=-90 THEN 'Good'
+           ELSE 'Poor'
+       END AS signal_bucket,
+       AVG(call_drop_flag)*100 AS drop_rate
+FROM fact_calls
+GROUP BY signal_bucket;
+
+CREATE VIEW IF NOT EXISTS view_tower_performance AS
+SELECT tower_id, COUNT(*) AS total_calls,
+       AVG(signal_strength_dbm) AS avg_signal,
+       SUM(call_drop_flag) AS dropped_calls
+FROM fact_calls
+GROUP BY tower_id;
+
+CREATE VIEW IF NOT EXISTS view_heavy_users AS
+SELECT caller_number, COUNT(*) AS call_count,
+       SUM(call_duration_seconds) AS total_duration
+FROM fact_calls
+GROUP BY caller_number
+ORDER BY call_count DESC
+LIMIT 10;
+
+
+#SQL_exporter.py
+
+import os
+import sqlite3
+import pandas as pd
+
+VIEWS={
+    'drop_rate_by_state':'view_drop_rate_by_state',
+    'peak_hours':'view_peak_hours',
+    'operator_quality':'view_operator_quality',
+    'signal_correlation':'view_signal_correlation',
+    'tower_performance':'view_tower_performance',
+    'heavy_users':'view_heavy_users'
+}
+
+def export_views():
+    db_path='data/telecom.db'
+    export_dir='data/exports'
+
+    if os.path.exists(db_path):
+        conn=sqlite3.connect(db_path)
+        try:
+            os.makedirs(export_dir,exist_ok=True)
+            for file_key,view_name in VIEWS.items():
+                query=f'Select * from {view_name};'
+                df=pd.read_sql_query(query,conn)
+                output_file=os.path.join(export_dir,f'{file_key}.csv')
+                df.to_csv(output_file,index=False)
+        except Exception as e:
+            print(e)
+        finally:
+            conn.close()
+
+if __name__=="__main__":
+    export_views()
+
+# analysis.py
+
+import pandas as pd
+import os
+import numpy as np
+
+EXPORT_PATH = 'data/exports/'
+PROCESSED_PATH = 'data/processed/'
+
+def analysis():
+    results = {}
+
+    # --- Peak Hours File ---
+    peak_hours_file = os.path.join(EXPORT_PATH, 'peak_hours.csv')
+    if os.path.exists(peak_hours_file):
+        df_peak = pd.read_csv(peak_hours_file)
+        df_peak = df_peak.sort_values(by='hour').reset_index(drop=True)
+        df_peak['rolling_calls'] = (
+            df_peak['total_calls'].rolling(window=3, min_periods=1).mean()
+        )
+        results['rolling_call_volume'] = df_peak
+    else:
+        results['rolling_call_volume'] = pd.DataFrame()
+
+    # --- Drop Rate and Towers File ---
+    drop_rate_file = os.path.join(EXPORT_PATH, 'drop_rate_by_state.csv')
+    towers_file = os.path.join(PROCESSED_PATH, 'towers_clean.csv')
+    if os.path.exists(drop_rate_file) and os.path.exists(towers_file):
+        df_drop = pd.read_csv(drop_rate_file)
+        df_towers = pd.read_csv(towers_file)
+        df_centroids = (
+            df_towers.groupby('state_name')[['latitude', 'longitude']].mean().reset_index()
+        )
+        df_heatmap = pd.merge(df_drop, df_centroids, on='state_name', how='inner')
+        results['state_heatmap'] = df_heatmap
+    else:
+        results['state_heatmap'] = pd.DataFrame()
+
+    # --- Heavy Users File ---
+    heavy_users_file = os.path.join(EXPORT_PATH, 'heavy_users.csv')
+    if os.path.exists(heavy_users_file):
+        df_users = pd.read_csv(heavy_users_file)
+        conditions = [
+            (df_users['total_duration'] < 2000),
+            (df_users['total_duration'] >= 2000) & (df_users['total_duration'] < 8000),
+            (df_users['total_duration'] >= 8000)
+        ]
+        choices = ["Light", "Medium", "Heavy"]
+        df_users['usage_segment'] = np.select(conditions, choices, default='Unknown')
+        results['customer_segments'] = df_users
+    else:
+        results['customer_segments'] = pd.DataFrame()
+
+    # --- Operator Quality File ---
+    operator_file = os.path.join(EXPORT_PATH, 'operator_quality.csv')
+    if os.path.exists(operator_file):
+        df_operator = pd.read_csv(operator_file)
+        df_distribution = df_operator.describe().reset_index()
+        results['usage_distribution'] = df_distribution
+    else:
+        results['usage_distribution'] = pd.DataFrame()
+
+    return results
+
+if __name__ == "__main__":
+    metrics_dict = analysis()
+    for key, dataframe in metrics_dict.items():
+        print(f'Calculated Data {key} shape: {dataframe.shape}')
+
+#alert_drop_rate.py
+
+import os
+from datetime import datetime
+import pandas as pd
+
+def log_alert(message: str):
+    log_dir = "logs"
+    log_file_path = os.path.join(log_dir, "alerts.log")
+    os.makedirs(log_dir, exist_ok=True)
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    formatted_message = f"[{timestamp}] {message}"
+    with open(log_file_path, "a", encoding="utf-8") as f:
+        f.write(formatted_message + "\n")
+    print(formatted_message)
+
+def check_drop_rate():
+    file_path = "data/exports/drop_rate_by_state.csv"
+    if not os.path.exists(file_path):
+        return
+    df = pd.read_csv(file_path)
+    df["drop_rate_pct"] = pd.to_numeric(df["drop_rate_pct"], errors="coerce")
+    high_drop_df = df[df["drop_rate_pct"] > 50]
+    for _, row in high_drop_df.iterrows():
+        state = row["state_name"]
+        pct = round(row["drop_rate_pct"], 2)
+        message = f"HIGH DROP RATE: {state} at {pct}%"
+        log_alert(message)
+
+def check_low_signal():
+    file_path = "data/exports/operator_quality.csv"
+    if not os.path.exists(file_path):
+        return
+    df = pd.read_csv(file_path)
+    df["avg_signal"] = pd.to_numeric(df["avg_signal"], errors="coerce")
+    low_signal_df = df[df["avg_signal"] < -90]
+    for _, row in low_signal_df.iterrows():
+        operator = row["operator_name"]
+        avg_signal = round(row["avg_signal"], 2)
+        message = f"LOW SIGNAL: {operator} at {avg_signal} dBm"
+        log_alert(message)
+
+def check_inactive_towers():
+    file_path = "data/exports/tower_performance.csv"
+    if not os.path.exists(file_path):
+        return
+    df = pd.read_csv(file_path)
+    df["total_calls"] = pd.to_numeric(df["total_calls"], errors="coerce")
+    inactive_df = df[df["total_calls"] == 0]
+    for _, row in inactive_df.iterrows():
+        tower_id = int(row["tower_id"])
+        message = f"INACTIVE TOWER: ID {tower_id} has 0 calls"
+        log_alert(message)
+
+def run_alerts():
+    check_drop_rate()
+    check_low_signal()
+    check_inactive_towers()
+
+
+#send_email_summary.py
+
+import os
+import smtplib
+from email.mime.text import MIMEText
+import yaml
+import pandas as pd
+
+EXPORT_PATH = "data/exports/"
+CONFIG_PATH = "config/email_config.yaml"
+
+def build_email_body() -> str:
+    # --- 1. Drop Rate File ---
+    drop_rate_file = os.path.join(EXPORT_PATH, "drop_rate_by_state.csv")
+    if os.path.exists(drop_rate_file) and os.path.getsize(drop_rate_file) > 0:
+        df_drop = pd.read_csv(drop_rate_file)
+        if not df_drop.empty:
+            highest_drop_row = df_drop.loc[df_drop["drop_rate_pct"].idxmax()]
+            worst_state = highest_drop_row["state_name"]
+            worst_rate = round(highest_drop_row["drop_rate_pct"], 2)
+        else:
+            worst_state, worst_rate = "Empty File", 0.0
+    else:
+        worst_state, worst_rate = "N/A", 0.0
+
+    # --- 2. Operator Quality File ---
+    operator_file = os.path.join(EXPORT_PATH, "operator_quality.csv")
+    if os.path.exists(operator_file) and os.path.getsize(operator_file) > 0:
+        df_op = pd.read_csv(operator_file)
+        if not df_op.empty:
+            weakest_op_row = df_op.loc[df_op["avg_signal"].idxmin()]
+            weakest_op = weakest_op_row["operator_name"]
+            weakest_signal = round(weakest_op_row["avg_signal"], 2)
+        else:
+            weakest_op, weakest_signal = "Empty File", 0.0
+    else:
+        weakest_op, weakest_signal = "N/A", 0.0
+
+    # --- 3. Peak Hours File ---
+    peak_file = os.path.join(EXPORT_PATH, "peak_hours.csv")
+    if os.path.exists(peak_file) and os.path.getsize(peak_file) > 0:
+        df_peak = pd.read_csv(peak_file)
+        if not df_peak.empty:
+            busiest_row = df_peak.loc[df_peak["total_calls"].idxmax()]
+            busiest_hour = f"{int(busiest_row['hour'])}:00"
+            max_calls = busiest_row["total_calls"]
+        else:
+            busiest_hour, max_calls = "Empty File", 0
+    else:
+        busiest_hour, max_calls = "N/A", 0
+
+    # --- Summary Construction ---
+    summary_text = (
+        "Daily Network Performance Executive Summary\n"
+        "===========================================\n\n"
+        f"1. Highest Drop-Rate Region: {worst_state} ({worst_rate}% dropped calls)\n"
+        f"2. Weakest Network Operator: {weakest_op} (Avg Signal: {weakest_signal} dBm)\n"
+        f"3. Busiest Operational Window: Hour {busiest_hour} ({max_calls} aggregate connections monitored)\n\n"
+        "Please check the automated logs file for detailed localized tower telemetry errors."
+    )
+    return summary_text
+
+
+def send_email_summary():
+    if not os.path.exists(CONFIG_PATH):
+        raise FileNotFoundError(f"Missing mandatory YAML settings file: {CONFIG_PATH}")
+    with open(CONFIG_PATH, "r", encoding="utf-8") as f:
+        config = yaml.safe_load(f)
+
+        smtp_config = config#.get("smtp", {})
+        # host = smtp_config.get("host")
+        host = config['smtp_host']
+        # port = smtp_config.get("smtp_port", 587)
+        port = config['smtp_port']
+        username = smtp_config.get("from_email")
+        password = smtp_config.get("app_password")
+        recipient = smtp_config.get("to_email")
+
+        body_content = build_email_body()
+        msg = MIMEText(body_content, "plain", "utf-8")
+        msg["Subject"] = "Daily Network Performance Summary"
+        msg["From"] = username
+        msg["To"] = recipient
+        print(config)
+        # print(f"Connecting to SMTP mail routing node: {host}:{port}...")
+        # with smtplib.SMTP(host, port) as server:
+        #     server.starttls()
+        #     server.login(username, password)
+        #     server.sendmail(username, [recipient], msg.as_string())
+        # print(f"Daily system metric documentation successfully dispatched out to recipient: {recipient}")
+        print(f"Connecting to SMTP mail routing node: {host}:{port}...")
+
+        # Pass host and port explicitly inside the initialization line
+        with smtplib.SMTP(host=host, port=port) as server:
+            server.ehlo()         # Identify yourself to the server first
+            server.starttls()     # Encrypt the network stream
+            server.ehlo()         # Re-identify over the now-encrypted stream
+            server.login(username, password)
+            server.sendmail(username, [recipient], msg.as_string())
+
+        print(f"Daily system metric documentation successfully dispatched out to recipient: {recipient}")
+
+send_email_summary()
+
+
+#generates_charts.py
+
+import os
+
+import matplotlib.pyplot as plt
+
+import pandas as pd
+
+from scripts.analysis.analysis import analysis
+
+PLOTS_DIR = "data/plots/"
+os.environ['MLPCONFIGDIR'] = '/tmp/matplotlib_config'
+
+def ensure_plots_dir():
+
+    os.makedirs(PLOTS_DIR, exist_ok=True)
+
+def chart_rolling_call_volume():
+
+    print("Generating rolling call volume chart...")
+
+    data_dict = analysis()
+
+    df = data_dict.get("rolling_call_volume", pd.DataFrame())
+
+    if df.empty:
+
+        print("Skipping chart_rolling_call_volume: DataFrame is empty or missing.")
+
+        return
+
+    plt.figure(figsize=(10, 5))
+
+    plt.plot(df["hour"], df["total_calls"], marker='o', label="Total Calls", color="skyblue", linewidth=2)
+
+    plt.plot(df["hour"], df["rolling_calls"], linestyle="--", label="3-Hour Rolling Avg", color="navy", linewidth=2)
+
+    plt.title("Hourly Network Call Volume Variations & Trends", fontsize=14, fontweight="bold", pad=15)
+
+    plt.xlabel("Hour of Day (24h Format)", fontsize=11)
+
+    plt.ylabel("Aggregate Count of Connections", fontsize=11)
+
+    plt.xticks(range(0, 24))
+
+    plt.grid(True, linestyle=":", alpha=0.6)
+
+    plt.legend(loc="upper right", frameon=True)
+
+    ensure_plots_dir()
+
+    output_path = os.path.join(PLOTS_DIR, "rolling_call_volume.png")
+
+    plt.savefig(output_path, bbox_inches="tight", dpi=150)
+
+    plt.close()
+
+    print(f"Successfully saved chart to: {output_path}")
+
+def chart_state_heatmap():
+
+    print("Generating state drop rate heatmap...")
+
+    data_dict = analysis()
+
+    df = data_dict.get("state_heatmap", pd.DataFrame())
+
+    if df.empty:
+
+        print("Skipping chart_state_heatmap: DataFrame is empty or missing.")
+
+        return
+
+    plt.figure(figsize=(10, 6))
+
+    scatter = plt.scatter(
+
+        df["longitude"],
+
+        df["latitude"],
+
+        c=df["drop_rate_pct"],
+
+        cmap="YlOrRd",
+
+        s=400,             # Size anchor for visualization prominence
+
+        edgecolors="black",
+
+        alpha=0.85
+
+        )
+
+    for _, row in df.iterrows():
+
+        plt.text(row["longitude"], row["latitude"], row["state_name"], fontsize=9, ha="center", va="center", weight="bold")
+
+    cbar = plt.colorbar(scatter)
+
+    cbar.set_label("Call Drop Percentage (%)", fontsize=11)
+
+    plt.title("State-Level Performance Quality & Call Drop Density Map", fontsize=14, fontweight="bold", pad=15)
+
+    plt.xlabel("Longitude Coords", fontsize=11)
+
+    plt.ylabel("Latitude Coords", fontsize=11)
+
+    plt.grid(True, linestyle="--", alpha=0.4)
+
+    ensure_plots_dir()
+
+    output_path = os.path.join(PLOTS_DIR, "state_heatmap.png")
+
+    plt.savefig(output_path, bbox_inches="tight", dpi=150)
+
+    plt.close()
+
+    print(f"Successfully saved chart to: {output_path}")
+
+def chart_customer_segments():
+
+    print("Generating customer segments profile distribution...")
+
+    data_dict = analysis()
+
+    df = data_dict.get("customer_segments", pd.DataFrame())
+
+    if df.empty or "usage_segment" not in df.columns:
+
+        print("Skipping chart_customer_segments: DataFrame is empty or column missing.")
+
+        return
+
+    segment_counts = df["usage_segment"].value_counts()
+
+    ordered_categories = ["Light", "Medium", "Heavy"]
+
+    counts = [segment_counts.get(cat, 0) for cat in ordered_categories]
+
+    color_map = ["green", "orange", "red"]
+
+    plt.figure(figsize=(8, 5))
+
+    bars =plt.bar(ordered_categories, counts, color=color_map, edgecolor="black", width=0.6)
+
+    for bar in bars:
+
+        height = bar.get_height()
+
+        plt.text(bar.get_x() + bar.get_width()/2., height + 0.1, f'{int(height)}', ha="center", va="bottom", weight="bold")
+
+    plt.title("Subscriber Distribution Profiling by Total Usage Metrics", fontsize=14, fontweight="bold", pad=15)
+
+    plt.xlabel("Usage Segments Classification", fontsize=11)
+
+    plt.ylabel("Total Count of Active Profiles", fontsize=11)
+
+    plt.grid(axis="y", linestyle=":", alpha=0.6)
+
+    ensure_plots_dir()
+
+    output_path = os.path.join(PLOTS_DIR, "customer_segments.png")
+
+    plt.savefig(output_path, bbox_inches="tight", dpi=150)
+
+    plt.close()
+
+    print(f"Successfully saved chart to: {output_path}")
+
+#main.py
+
+"""
+TELECOM CDR – ANALYSIS, VISUALIZATION, ALERTS, EMAIL
+----------------------------------------------------------
+Run this AFTER build.py generates SQL DW and exports.
+"""
+
+import os
+import sys
+
+sys.path.append(os.path.abspath(os.path.dirname(__file__)))
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "scripts")))
+
+from scripts.visualization.generate_charts import (
+    chart_rolling_call_volume,
+    chart_state_heatmap,
+    chart_customer_segments
+)
+from scripts.automation.alert_drop_rate import run_alerts
+from scripts.automation.send_email_summary import send_email_summary
+
+def run_main():
+    print("=" * 60)
+    print("STARTING FINAL STAGE: POST-DATA-WAREHOUSE PIPELINE CODES")
+    print("=" * 60)
+
+    try:
+        # Step 1 - Generate Visualizations
+        print("\n[Step 1/3] Initiating network analytical charting modules...")
+        chart_rolling_call_volume()
+        chart_state_heatmap()
+        chart_customer_segments()
+        print(" -> All figures successfully stored in data/plots/.")
+
+    # Step 2 - Run Alerts
+        print("\n[Step 2/3] Scanning performance logs for localized anomalies...")
+        run_alerts()
+        print(" -> Anomaly metrics evaluation trace logged into logs/alerts.log.")
+
+    # Step 3 - Send Email Summary
+        print("\n[Step 3/3] Commencing SMTP executive summary compilation...")
+        send_email_summary()
+        print(" -> Report metrics documentation email summary successfully dispatched.")
+
+        print("\n" + "=" * 60)
+        print("FINAL STAGE PIPELINE RUN SUCCESSFUL: ALL CRON ACTIONS OPERATIONAL")
+        print("=" * 60)
+
+    except Exception as e:
+        print(f"\n[CRITICAL FAILURE] Pipeline execution cycle broke down at step level: {e}")
+        raise e
+
+if __name__ == "__main__":
+    run_main()
+
+
+https://anotepad.com/notes/xdfqt7nc
+
+
+
