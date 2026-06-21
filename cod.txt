@@ -244,3 +244,32 @@ def main():
 
 
 Use this key - AIzaSyDVcjCB7NU7c_HWjcEXnozvL4rA2zzIX1A
+
+
+s2 q1
+
+```
+# main.py - Implement your code here
+import pandas as pd
+from genai_client import call_gemini_json
+
+def main():
+    df=pd.read_csv("data/job_logs.csv")
+    for i, (_,row) in enumerate(df[df["status"]=="FAILED"].iterrows()):
+        prompt =f"""
+Job Name: {row['job_name']}
+Start:{row['run_start_utc']}
+End:{row['run_end_utc']}
+Error:{row['error']}
+Affected Tables: {row['affected_tables']}
+Return JSON with:
+summary
+impact
+technical_details
+next_steps
+"""
+        result=call_gemini_json(prompt,row.to_dict(),i)
+if __name__ == "__main__":
+    main()
+
+```
