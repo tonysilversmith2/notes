@@ -1,0 +1,162 @@
+s3c1
+```
+# main.py - Implement your code here
+import google.generativeai as genai
+
+genai.configure(api_key="YOUR_API_KEY")
+model=genai.GenerativeModel("gemini-2.0-flash")
+
+def generate_text(user_input):
+    if not user_input or not user_input.strip():
+        return "Please enter a valid idea."
+    prompt=f'Generate a creative and simple explanation or expansion for the idea: {user_input}'
+    response=model.generate_content(prompt)
+    
+    return str(response.text)
+
+if __name__ == "__main__":
+    user_input=input()
+    result=generate_text(user_input)
+    print(result)
+
+```
+[21/06, 5:49 pm] Akshat Shrivastava LTM: ```
+import json
+import google.generativeai as genai
+
+genai.configure(api_key="YOUR_API_KEY")
+
+model = genai.GenerativeModel("gemini-2.5-flash")
+
+def generate_qa(topic: str):
+    prompt = f"""
+Generate exactly 3 beginner-level conceptual
+SQL questions and answers for the topic:
+{topic}
+
+Format strictly as:
+
+Q1: <question>
+A1: <answer>
+
+Q2: <question>
+A2: <answer>
+
+Q3: <question>
+A3: <answer>
+"""
+
+    try:
+        response = model.generate_content(prompt)
+        
+        if not response or not response.text:
+            return [],[]
+            
+        text = response.text.strip().splitlines()
+        questions = []
+        answers = []
+        
+        for line in text:
+            line = line.strip()
+            
+            if line.startswith("Q"):
+                questions.append(line)
+                
+            elif line.startswith("A"):
+                answers.append(line)
+                
+        return questions, answers
+    except Exception:
+        return [], []
+
+def main():
+    print('SQL/DB Question Generator\n')
+    topic = input("Enter one SQL topic:").strip()
+    
+    if not topic:
+        print("Invalid topic")
+        return
+        
+    questions, answer = generate_qa(topic)
+    
+    if not questions or not answers:
+        print("Failed to generate questions and answers")
+        return
+        
+    print(f"\nTopic: {topic}\n")
+    print("Here are your 3 questions:\n")
+    
+    for q in questions:
+        print(q)
+        
+    print("\nAnswers are being saved...\n")
+    
+    data = {
+        "topic" : topic,
+        "answers" : answers
+    }
+
+```
+[21/06, 5:49 pm] Akshat Shrivastava LTM: S3 cod2
+[21/06, 5:52 pm] Akshat Shrivastava LTM: ```
+import csv
+import random
+import google.generativeai as genai
+
+genai.configure(api_key="YOUR_API_KEY")
+
+model = genai.GenerativeModel("gemini-2.5-flash")
+
+def load_question():
+    questions = []
+    
+    with open("python_questions.csv", "r") as file:
+        reader = csv.DictReader(file)
+        
+        for row in reader:
+            questions.append(row)
+    return questions
+
+def evaluate_answer(reference_answer, student_answer):
+    prompt = f"""
+Reference Answer: {reference_answer}
+Student Answer : {student_answer}
+
+Return exactly:
+Score: <number>
+Feedback: <short feedback>
+"""
+
+    try:
+        response = model.generate_content(prompt)
+        
+        if not response or not response.text:
+            return {"score": "N/A", "feedback": "No feedback."}
+            score, feedback = "N/A", "No feedback."
+            
+        for line in response.text.strip().splitlines():
+            if line.startswith("Score:"):
+                score = line.split(":", 1)[1].strip()
+            elif line.startswith("Feedback:"):
+                feedback = line.split(":", 1)[1].strip()
+        return {"score": score, "feedback": feedback}
+        
+    except:
+        return {"score": "N/A", "feedback": "No feedback."}
+
+def main():
+    print("Python Concept Evaluator (Gemini 2.0 Flash)\n")
+    
+    q = random.choice(load_questions())
+    print(f"Question: {q['question']}\n")
+    student_answer = input("Your Answer: ")
+    print('\nEvaluating your answer...\n')
+    result = evaluate_answer(q["answer"], student_answer)
+    print(f"Score: {result['score']}")
+    print(f"Feedback: {result['feedback']}")
+
+if __name__ == "__main__":
+    main()
+
+```
+[21/06, 5:52 pm] Akshat Shrivastava LTM: S3c3
