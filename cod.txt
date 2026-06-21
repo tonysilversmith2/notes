@@ -207,3 +207,37 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
+
+session 2 question 3
+
+import os
+import pandas as pd
+
+try:
+    from genai_client import interactive_loop
+except ImportError:
+    pass
+
+def main():
+    df=pd.read_csv(os.path.join("data","viewership.csv"))
+    if "date" in df.columns:
+        df["date"]=pd.to_datetime(df["date"], errors="coerce")
+    if "region" in df.columns:
+        df["region"]=df["region"].astype(str).str.upper().str.strip().replace("",pd.NA)
+        
+    a_prompt=(
+        "You are a Data Analyst. Convert the users's natural language question into valid pandas code. "
+        "The input DataFrame is named 'df'. Your code must compute the answer and assign the final result "
+        "to a variable named 'result'. Return ONLY the executable python code block."
+        "Do not include markdown tags like ```python, do not include comments, and do not provide any extra explanations."
+    )
+    
+    s_prompt=(
+        "You are a Buisness Stratgist. Provide a coincise, plain-English buisness summary answering "
+        "the user's question based on the veiwership data trends. Highlight key metrics, trends, and actionable "
+        "next-step recommendations. Keep your entire response under 100 words."
+    )
+    
+    interactive_loop(df, a_prompt, s_prompt)
