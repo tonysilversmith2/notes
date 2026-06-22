@@ -546,3 +546,59 @@ def identify_peak_stress_moment(joined_df):
         )['ThroughputMbps'].sum().idxmax()
     )
 ```
+
+##Today's pandas question's solution 
+
+```python
+import pandas as pd
+
+
+def load_and_clean_data(households_path, usage_path):
+    households_df = pd.read_csv(households_path)
+    usage_df = pd.read_csv(usage_path)
+    usage_df = usage_df.dropna(subset=["UsageLiters"])
+    return households_df, usage_df
+
+
+def clean_usage_values(usage_df):
+    usage_df["UsageLiters"] = usage_df["UsageLiters"].astype(float)
+    usage_df = usage_df[usage_df["UsageLiters"] >= 0]
+    return usage_df
+
+
+def merge_usage_with_zones(households_df, usage_df):
+    merged_df = pd.merge(
+        usage_df, households_df, on="HouseholdID", how="inner"
+    )
+    return merged_df
+
+
+def detect_high_usage_days(merged_df, threshold):
+    daily_totals = (
+        merged_df.groupby("Date")["UsageLiters"].sum().reset_index()
+    )
+
+    result = (
+        daily_totals[daily_totals["UsageLiters"] > threshold]["Date"]
+        .sort_values()
+        .tolist()
+    )
+    return result
+
+
+def zone_wise_average_usage(merged_df):
+    result = (
+        merged_df.groupby("Zone")["UsageLiters"]
+        .mean()
+        .round(2)
+        .sort_values(ascending=False)
+        .to_dict()
+    )
+    return result
+
+
+def peak_usage_day(merged_df):
+    daily_totals = merged_df.groupby("Date")["UsageLiters"].sum()
+    return daily_totals.idxmax()
+
+```
