@@ -1,4 +1,4 @@
-#Question 1: Student Marks Manager (Dictionary)
+## Question 1: Student Marks Manager (Dictionary)
 
 Problem Statement
 
@@ -71,7 +71,7 @@ print("Rahul Marks:", obj.get_marks("Rahul"))
 
 ```
 
-#Question 2: Shopping Cart Manager (List)
+## Question 2: Shopping Cart Manager (List)
 
 Problem Statement
 
@@ -145,7 +145,7 @@ print("Items after removal:", cart.show_items())
 
 ```
 
-#Question 3: Employee Attendance System (Dictionary + List)
+## Question 3: Employee Attendance System (Dictionary + List)
 
 Problem Statement
 
